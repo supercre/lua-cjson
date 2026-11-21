@@ -181,6 +181,7 @@ value = cjson.decode(text)
 
 -- Get and/or set Lua CJSON configuration
 setting = cjson.decode_invalid_numbers([setting])
+    mode = cjson.decode_int64([mode])
 setting = cjson.encode_invalid_numbers([setting])
 keep = cjson.encode_keep_buffer([keep])
 depth = cjson.encode_max_depth([depth])
@@ -275,6 +276,46 @@ value = cjson.decode(json_text)
 Care must be taken after decoding JSON objects with numeric keys. Each
 numeric key will be stored as a Lua +string+. Any subsequent code
 assuming type +number+ may break.
+
+
+[[decode_int64]]
+decode_int64
+~~~~~~~~~~~~
+
+[source,lua]
+------------
+mode = cjson.decode_int64([mode])
+-- "off" (기본값), "auto", "always"
+------------
+
+supercre 포크에서 추가한 LuaJIT FFI 전용 설정입니다. 인자를 생략하면 현재 모드를
+반환하며, +cjson.new()+ 및 +cjson.safe.new()+는 기본값 +"off"+로 시작합니다.
+일반 Lua에서는 +"off"+만 사용할 수 있습니다. 활성화에 실패하면 기존 설정을 유지합니다.
+
++"off"+:: 모든 숫자를 기존처럼 Lua number로 디코딩합니다.
++"auto"+:: 절댓값이 +9007199254740991+을 넘는 10진 정수 토큰만 cdata로 변환합니다.
++"always"+:: 모든 10진 정수 토큰을 cdata로 변환합니다.
+
+signed 64비트 범위는 +int64_t+로 반환합니다. 그보다 큰 양수는 +uint64_t+입니다.
+활성화된 모드에서는 +-9223372036854775808+ 미만 또는
++18446744073709551615+ 초과 정수에 오류를 반환합니다.
++cjson.safe.decode+는 이 오류를 +nil, message+로 반환합니다.
+소수점, 지수, 비표준 숫자 표기는 기존 double 변환을 사용합니다.
++-0+은 +always+에서 정수 +0+이 됩니다.
+이 설정은 +decode_invalid_numbers+의 문법 검사 설정을 변경하지 않습니다.
+
+인코딩은 모든 모드에서 +int64_t+/+uint64_t+ cdata를 정확한 10진 정수로 출력합니다.
++LL+/+ULL+ 접미사나 따옴표를 붙이지 않고 +encode_number_precision+을 적용하지 않습니다.
+해당 cdata를 테이블 키로 사용하면 JSON 객체의 문자열 키로 출력합니다.
+포인터, 배열, 구조체, ctype 객체 등 다른 cdata는 지원하지 않습니다.
+JSON 객체의 키는 디코딩 시 기존처럼 문자열로 유지합니다.
+
+정수 값을 모두 정확히 왕복하려면 +always+를 사용하세요.
++auto+에서 Lua number로 남는 값은 기존 인코딩 정밀도의 영향을 받습니다.
+이미 Lua number로 반올림된 정수는 복원할 수 없으므로 큰 값을 만들 때는
+LuaJIT +LL+/+ULL+ 리터럴이나 JSON 문자열을 사용해야 합니다.
+JSON은 signed/unsigned 타입을 구분하지 않으므로 작은 +uint64_t+는
+디코딩 시 +int64_t+가 될 수 있습니다.
 
 
 [[decode_invalid_numbers]]

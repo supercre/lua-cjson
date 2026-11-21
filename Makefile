@@ -12,6 +12,7 @@
 
 ##### Build defaults #####
 LUA_VERSION =       5.3
+LUA =               lua
 TARGET =            cjson.so
 PREFIX =            /usr/local
 #CFLAGS =            -g -Wall -pedantic -fno-inline
@@ -70,7 +71,7 @@ FPCONV_OBJS =       fpconv.o
 
 ##### End customisable sections #####
 
-TEST_FILES =        README bench.lua genutf8.pl test.lua octets-escaped.dat \
+TEST_FILES =        README bench.lua genutf8.pl test.lua test-int64.lua octets-escaped.dat \
                     example1.json example2.json example3.json example4.json \
                     example5.json numbers.json rfc-example1.json \
                     rfc-example2.json types.json
@@ -82,7 +83,7 @@ ASCIIDOC =          asciidoc
 BUILD_CFLAGS =      -I$(LUA_INCLUDE_DIR) $(CJSON_CFLAGS)
 OBJS =              lua_cjson.o strbuf.o $(FPCONV_OBJS)
 
-.PHONY: all clean install install-extra doc
+.PHONY: all clean install install-extra doc test
 
 .SUFFIXES: .html .adoc
 
@@ -93,6 +94,9 @@ OBJS =              lua_cjson.o strbuf.o $(FPCONV_OBJS)
 	$(ASCIIDOC) -n -a toc $<
 
 all: $(TARGET)
+
+test: $(TARGET)
+	sh tests/run-tests.sh $(LUA) .
 
 doc: manual.html performance.html
 

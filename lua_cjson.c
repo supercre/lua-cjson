@@ -40,6 +40,7 @@
 #include <string.h>
 #include <math.h>
 #include <limits.h>
+#include <stdint.h>
 #include <lua.h>
 #include <lauxlib.h>
 
@@ -75,6 +76,11 @@
 #define DEFAULT_ENCODE_KEEP_BUFFER 1
 #define DEFAULT_ENCODE_NUMBER_PRECISION 14
 
+#define DECODE_INT64_OFF 0
+#define DECODE_INT64_AUTO 1
+#define DECODE_INT64_ALWAYS 2
+#define JSON_MAX_SAFE_INTEGER UINT64_C(9007199254740991)
+
 #ifdef DISABLE_INVALID_NUMBERS
 #undef DEFAULT_DECODE_INVALID_NUMBERS
 #define DEFAULT_DECODE_INVALID_NUMBERS 0
@@ -87,6 +93,8 @@ typedef enum {
     T_ARR_END,
     T_STRING,
     T_NUMBER,
+    T_INT64,
+    T_UINT64,
     T_BOOLEAN,
     T_NULL,
     T_COLON,
@@ -104,6 +112,8 @@ static const char *json_token_type_name[] = {
     "T_ARR_END",
     "T_STRING",
     "T_NUMBER",
+    "T_INT64",
+    "T_UINT64",
     "T_BOOLEAN",
     "T_NULL",
     "T_COLON",
@@ -133,6 +143,7 @@ typedef struct {
 
     int decode_invalid_numbers;
     int decode_max_depth;
+    int decode_int64;
 } json_config_t;
 
 typedef struct {
@@ -149,10 +160,60 @@ typedef struct {
     union {
         const char *string;
         double number;
+        uint64_t integer;
         int boolean;
     } value;
     int string_len;
 } json_token_t;
+
+/* 공개 FFI API만 사용한다. LuaJIT 내부 cdata 배치나 CTypeID는 참조하지 않는다.
+ * 두 개의 32비트 조각으로 생성하여 double을 거치는 정밀도 손실을 피한다. */
+static const char json_ffi_helpers[] =
+    "local ffi = require('ffi')\n"
+    "local signed = ffi.typeof('int64_t')\n"
+    "local unsigned = ffi.typeof('uint64_t')\n"
+    "local istype, cast = ffi.istype, ffi.cast\n"
+    "local tostring, match = tostring, string.match\n"
+    "local two32 = unsigned(4294967296)\n"
+    "return function(value)\n"
+    "  if istype(signed, value) or istype(unsigned, value) then\n"
+    "    return match(tostring(value), '^(-?%d+)U?LL$')\n"
+    "  end\n"
+    "end, function(hi, lo, is_unsigned)\n"
+    "  local value = unsigned(hi) * two32 + unsigned(lo)\n"
+    "  if is_unsigned then return value end\n"
+    "  return cast(signed, value)\n"
+    "end\n";
+
+/* 성공하면 스택을 유지하고, 실패하면 오류 객체를 남긴다.
+ * 함수는 모듈별 upvalue 테이블에 보관하므로 모듈과 함께 GC된다. */
+static int json_init_ffi(lua_State *l)
+{
+    int err;
+
+    lua_rawgeti(l, lua_upvalueindex(2), 1);
+    if (lua_isfunction(l, -1)) {
+        lua_pop(l, 1);
+        return 0;
+    }
+    lua_pop(l, 1);
+
+    err = luaL_loadbuffer(l, json_ffi_helpers, sizeof(json_ffi_helpers) - 1,
+                         "=cjson.int64");
+    if (!err)
+        err = lua_pcall(l, 0, 2, 0);
+    if (err)
+        return err;
+
+    lua_rawseti(l, lua_upvalueindex(2), 2);
+    lua_rawseti(l, lua_upvalueindex(2), 1);
+    return 0;
+}
+
+static int json_is_cdata(lua_State *l, int index)
+{
+    return strcmp(lua_typename(l, lua_type(l, index)), "cdata") == 0;
+}
 
 static const char *char2escape[256] = {
     "\\u0000", "\\u0001", "\\u0002", "\\u0003",
@@ -298,6 +359,19 @@ static int json_cfg_decode_max_depth(lua_State *l)
     return json_integer_option(l, 1, &cfg->decode_max_depth, 1, INT_MAX);
 }
 
+static int json_cfg_decode_int64(lua_State *l)
+{
+    static const char *options[] = { "off", "auto", "always", NULL };
+    json_config_t *cfg = json_arg_init(l, 1);
+    int mode = cfg->decode_int64;
+
+    json_enum_option(l, 1, &mode, options, 0);
+    if (mode != DECODE_INT64_OFF && json_init_ffi(l))
+        return luaL_error(l, "LuaJIT FFI is required for decode_int64");
+    cfg->decode_int64 = mode;
+    return 1;
+}
+
 /* Configures number precision when converting doubles to text */
 static int json_cfg_encode_number_precision(lua_State *l)
 {
@@ -396,6 +470,7 @@ static void json_create_config(lua_State *l)
     cfg->decode_invalid_numbers = DEFAULT_DECODE_INVALID_NUMBERS;
     cfg->encode_keep_buffer = DEFAULT_ENCODE_KEEP_BUFFER;
     cfg->encode_number_precision = DEFAULT_ENCODE_NUMBER_PRECISION;
+    cfg->decode_int64 = DECODE_INT64_OFF;
 
 #if DEFAULT_ENCODE_KEEP_BUFFER > 0
     strbuf_init(&cfg->encode_buf, 0);
@@ -456,6 +531,38 @@ static void json_encode_exception(lua_State *l, json_config_t *cfg, strbuf_t *js
         strbuf_free(json);
     luaL_error(l, "Cannot serialise %s: %s",
                   lua_typename(l, lua_type(l, lindex)), reason);
+}
+
+static void json_append_int64(lua_State *l, json_config_t *cfg,
+                              strbuf_t *json, int lindex)
+{
+    const char *text;
+    size_t len;
+
+    if (lindex < 0)
+        lindex = lua_gettop(l) + lindex + 1;
+    if (!lua_checkstack(l, 4))
+        json_encode_exception(l, cfg, json, lindex,
+                              "insufficient Lua stack for int64 conversion");
+
+    if (json_init_ffi(l)) {
+        if (!cfg->encode_keep_buffer)
+            strbuf_free(json);
+        lua_error(l);
+    }
+    lua_rawgeti(l, lua_upvalueindex(2), 1);
+    lua_pushvalue(l, lindex);
+    if (lua_pcall(l, 1, 1, 0)) {
+        if (!cfg->encode_keep_buffer)
+            strbuf_free(json);
+        lua_error(l);
+    }
+    text = lua_tolstring(l, -1, &len);
+    if (!text)
+        json_encode_exception(l, cfg, json, lindex,
+                              "only int64_t and uint64_t cdata are supported");
+    strbuf_append_mem(json, text, len);
+    lua_pop(l, 1);
 }
 
 /* json_append_string args:
@@ -653,6 +760,10 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
         } else if (keytype == LUA_TSTRING) {
             json_append_string(l, json, -2);
             strbuf_append_char(json, ':');
+        } else if (json_is_cdata(l, -2)) {
+            strbuf_append_char(json, '"');
+            json_append_int64(l, cfg, json, -2);
+            strbuf_append_mem(json, "\":", 2);
         } else {
             json_encode_exception(l, cfg, json, -2,
                                   "table key must be a number or string");
@@ -705,6 +816,10 @@ static void json_append_data(lua_State *l, json_config_t *cfg,
             break;
         }
     default:
+        if (json_is_cdata(l, -1)) {
+            json_append_int64(l, cfg, json, -1);
+            break;
+        }
         /* Remaining types (LUA_TFUNCTION, LUA_TUSERDATA, LUA_TTHREAD,
          * and LUA_TLIGHTUSERDATA) cannot be serialised */
         json_encode_exception(l, cfg, json, -1, "type not supported");
@@ -1005,9 +1120,53 @@ static int json_is_invalid_number(json_parse_t *json)
     return 0;
 }
 
+/* 정수 토큰을 먼저 확인한다. 소수점/지수 표기는 기존 double 경로를 따른다. */
+static int json_next_int64_token(json_parse_t *json, json_token_t *token)
+{
+    const char *p = json->ptr;
+    const char *digits;
+    uint64_t value = 0;
+    uint64_t limit;
+    int negative = (*p == '-');
+    int overflow = 0;
+    int digit;
+
+    if (negative)
+        p++;
+    digits = p;
+    limit = negative ? UINT64_C(9223372036854775808) : UINT64_MAX;
+    while (*p >= '0' && *p <= '9') {
+        digit = *p++ - '0';
+        if (value > (limit - digit) / 10)
+            overflow = 1;
+        else if (!overflow)
+            value = value * 10 + digit;
+    }
+
+    if (p == digits || !(*p == '\0' || *p == ',' || *p == ']' || *p == '}' ||
+                         *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+        return 0;
+    if (overflow) {
+        json_set_token_error(token, json, "integer outside int64/uint64 range");
+        return 1;
+    }
+    if (json->cfg->decode_int64 == DECODE_INT64_AUTO &&
+        value <= JSON_MAX_SAFE_INTEGER)
+        return 0;
+
+    token->type = negative || value <= INT64_MAX ? T_INT64 : T_UINT64;
+    token->value.integer = negative ? UINT64_C(0) - value : value;
+    json->ptr = p;
+    return 1;
+}
+
 static void json_next_number_token(json_parse_t *json, json_token_t *token)
 {
     char *endptr;
+
+    if (json->cfg->decode_int64 != DECODE_INT64_OFF &&
+        json_next_int64_token(json, token))
+        return;
 
     token->type = T_NUMBER;
     token->value.number = fpconv_strtod(json->ptr, &endptr);
@@ -1232,6 +1391,25 @@ static void json_parse_array_context(lua_State *l, json_parse_t *json)
     }
 }
 
+static void json_push_int64(lua_State *l, json_parse_t *json,
+                            json_token_t *token)
+{
+    uint64_t value = token->value.integer;
+
+    if (!lua_checkstack(l, 4)) {
+        strbuf_free(json->tmp);
+        luaL_error(l, "insufficient Lua stack for int64 conversion");
+    }
+    lua_rawgeti(l, lua_upvalueindex(2), 2);
+    lua_pushnumber(l, (double)(value >> 32));
+    lua_pushnumber(l, (double)(value & UINT64_C(0xffffffff)));
+    lua_pushboolean(l, token->type == T_UINT64);
+    if (lua_pcall(l, 3, 1, 0)) {
+        strbuf_free(json->tmp);
+        lua_error(l);
+    }
+}
+
 /* Handle the "value" context */
 static void json_process_value(lua_State *l, json_parse_t *json,
                                json_token_t *token)
@@ -1243,6 +1421,10 @@ static void json_process_value(lua_State *l, json_parse_t *json,
     case T_NUMBER:
         lua_pushnumber(l, token->value.number);
         break;;
+    case T_INT64:
+    case T_UINT64:
+        json_push_int64(l, json, token);
+        break;
     case T_BOOLEAN:
         lua_pushboolean(l, token->value.boolean);
         break;;
@@ -1363,6 +1545,7 @@ static int lua_cjson_new(lua_State *l)
         { "encode_sparse_array", json_cfg_encode_sparse_array },
         { "encode_max_depth", json_cfg_encode_max_depth },
         { "decode_max_depth", json_cfg_decode_max_depth },
+        { "decode_int64", json_cfg_decode_int64 },
         { "encode_number_precision", json_cfg_encode_number_precision },
         { "encode_keep_buffer", json_cfg_encode_keep_buffer },
         { "encode_invalid_numbers", json_cfg_encode_invalid_numbers },
@@ -1379,7 +1562,8 @@ static int lua_cjson_new(lua_State *l)
 
     /* Register functions with config data as upvalue */
     json_create_config(l);
-    json_setfuncs(l, reg, 1);
+    lua_newtable(l);
+    json_setfuncs(l, reg, 2);
 
     /* Set cjson.null */
     lua_pushlightuserdata(l, NULL);

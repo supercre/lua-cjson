@@ -3,6 +3,68 @@ Mark Pulford <mark@kyne.au>
 
 The Lua CJSON module provides JSON support for Lua.
 
+== supercre 포크: LuaJIT 64비트 정수
+
+https://github.com/mpx/lua-cjson[mpx/lua-cjson] 기반 포크입니다.
+LuaJIT의 `int64_t`와 `uint64_t` cdata를 정밀도 손실 없이 JSON 정수로
+인코딩하며, 선택적으로 JSON 정수를 cdata로 디코딩합니다.
+LuaJIT 내부 헤더 없이 공개 Lua/C API와 FFI API를 사용합니다.
+기존 Lua 환경과 기본 디코딩 동작은 유지됩니다.
+
+[source,lua]
+----
+local json = require "cjson"
+json.decode_int64("always")
+
+local value = json.decode('{"id":9223372036854775807}')
+assert(type(value.id) == "cdata")
+assert(value.id == 9223372036854775807LL)
+assert(json.encode(value) == '{"id":9223372036854775807}')
+
+assert(json.encode(18446744073709551615ULL) == "18446744073709551615")
+----
+
+`decode_int64` 모드:
+
+* `"off"` (기본값): 기존처럼 Lua number로 디코딩합니다.
+* `"auto"`: 절댓값이 `9007199254740991`을 넘는 정수만 cdata로 디코딩합니다.
+* `"always"`: 모든 10진 정수 토큰을 cdata로 디코딩합니다.
+
+`int64_t` 범위는 signed cdata로, 그보다 큰 양수는 `uint64_t`로 반환합니다.
+`auto`/`always`에서는 `-9223372036854775808`보다 작거나
+`18446744073709551615`보다 큰 정수를 오류로 처리합니다.
+소수점과 지수 표기는 기존 Lua number 동작을 따릅니다.
+`cjson.safe`와 `cjson.new()`에서도 사용할 수 있고 설정은 인스턴스별로 독립적입니다.
+
+인코딩은 별도 옵션 없이 지원하며 `encode_number_precision`의 영향을 받지 않습니다.
+정수 cdata 키는 JSON 객체의 문자열 키로 출력됩니다. 다른 cdata 타입은 오류입니다.
+전체 정수 왕복이 필요하면 `always`를 사용하세요. `auto`에서 남는 Lua number는
+기존의 기본 14자리 인코딩 정밀도가 적용됩니다.
+큰 정수는 처음부터 `LL`/`ULL` 리터럴이나 JSON 문자열로 전달해야 합니다.
+이미 Lua number로 반올림된 값은 복원할 수 없습니다.
+JSON 자체는 부호 타입 정보를 저장하지 않으므로 작은 `uint64_t`는 디코딩 시
+`int64_t`가 될 수 있습니다. 숫자 값은 유지됩니다.
+
+=== LuaJIT 빌드 및 테스트
+
+macOS (Homebrew LuaJIT):
+
+[source,sh]
+----
+cmake -S . -B build \
+  -DLUA_INCLUDE_DIR="$(pkg-config --variable=includedir luajit)" \
+  -DLUA_LIBRARY="$(pkg-config --variable=libdir luajit)/libluajit-5.1.dylib"
+cmake --build build
+sh tests/run-tests.sh luajit build
+----
+
+Linux에서는 위 `LUA_LIBRARY`의 파일명을 `libluajit-5.1.so`로 바꾸면 됩니다.
+Makefile로 빌드한 경우에는 `make test LUA=luajit`을 사용할 수 있습니다.
+테스트 러너는 Perl로 UTF-8 검증 데이터를 생성합니다.
+CI는 LuaJIT 및 Lua 5.1에서 기본/내장 부동소수점 변환 빌드를 각각 검증합니다.
+
+== Upstream overview
+
 *Features*::
 - Fast, standards compliant encoding/parsing routines
 - Full support for JSON with UTF-8, including decoding surrogate pairs
