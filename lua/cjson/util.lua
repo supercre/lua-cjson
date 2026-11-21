@@ -194,8 +194,11 @@ local function run_test(testname, func, input, should_work, output)
         print(("[%s] %s"):format(name, serialise_value(value, false)))
     end
 
-    local result = { pcall(func, unpack(input)) }
-    local success = table.remove(result, 1)
+    -- nil 반환값이 포함되어도 테이블 길이에 의존하지 않고 결과를 분리한다.
+    local function collect_result(success, ...)
+        return success, { ... }
+    end
+    local success, result = collect_result(pcall(func, unpack(input)))
 
     local correct = false
     if success == should_work and compare_values(result, output) then
