@@ -55,7 +55,7 @@
 #define CJSON_VERSION   "2.1devel"
 #endif
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(CJSON_STATIC)
 #define CJSON_EXPORT    __declspec(dllexport)
 #else
 #define CJSON_EXPORT    extern

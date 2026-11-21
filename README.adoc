@@ -63,6 +63,18 @@ Makefile로 빌드한 경우에는 `make test LUA=luajit`을 사용할 수 있�
 테스트 러너는 Perl로 UTF-8 검증 데이터를 생성합니다.
 CI는 LuaJIT 및 Lua 5.1에서 기본/내장 부동소수점 변환 빌드를 각각 검증합니다.
 
+=== Conan 및 정적 링크
+
+SC Conan 레퍼런스는 `lua-cjson/2.1.0-sc.1@sc/dev`입니다.
+https://github.com/supercre/conan-recipes/tree/main/recipes/lua-cjson[레시피와 사용법]을
+참고하세요. `find_package(lua-cjson CONFIG REQUIRED)`로 가져와
+`lua-cjson::lua-cjson`과 기존 LuaJIT 런타임을 함께 연결합니다.
+`lua_cjson.h`의 `luaopen_cjson`과 `luaopen_cjson_safe`를 호스트의
+`package.preload`에 등록하면 `require "cjson"`과 `require "cjson.safe"`를 사용할 수 있습니다.
+
+직접 정적 라이브러리를 빌드하려면 `-DCJSON_BUILD_STATIC=ON`과
+`-DLUA_INCLUDE_DIR=<LuaJIT 헤더 경로>`를 지정합니다. Lua 런타임은 포함하지 않습니다.
+
 == Upstream overview
 
 *Features*::

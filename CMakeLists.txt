@@ -8,6 +8,7 @@ project(lua-cjson C)
 
 option(USE_INTERNAL_FPCONV "Use internal strtod() / g_fmt() code for performance")
 option(MULTIPLE_THREADS "Support multi-threaded apps with internal fpconv - recommended" ON)
+option(CJSON_BUILD_STATIC "Build a static library for an existing Lua 5.1/LuaJIT runtime" OFF)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING
@@ -15,7 +16,15 @@ if(NOT CMAKE_BUILD_TYPE)
         FORCE)
 endif()
 
-find_package(Lua51 REQUIRED)
+if(CJSON_BUILD_STATIC)
+    # 정적 라이브러리는 헤더만 사용하고 Lua 런타임은 소비자가 연결한다.
+    find_path(LUA_INCLUDE_DIR lua.h PATH_SUFFIXES luajit-2.1 lua5.1)
+    if(NOT LUA_INCLUDE_DIR)
+        message(FATAL_ERROR "Set LUA_INCLUDE_DIR to Lua 5.1 or LuaJIT headers")
+    endif()
+else()
+    find_package(Lua51 REQUIRED)
+endif()
 include_directories(${LUA_INCLUDE_DIR})
 
 if(NOT USE_INTERNAL_FPCONV)
@@ -51,6 +60,19 @@ if(NOT HAVE_ISINF)
 endif()
 
 set(_MODULE_LINK "${CMAKE_THREAD_LIBS_INIT}")
+if(CJSON_BUILD_STATIC)
+    add_library(cjson STATIC lua_cjson.c strbuf.c ${FPCONV_SOURCES})
+    target_compile_definitions(cjson PRIVATE CJSON_STATIC)
+    set_target_properties(cjson PROPERTIES OUTPUT_NAME "lua-cjson")
+    target_link_libraries(cjson ${_MODULE_LINK})
+    if(WIN32 AND NOT USE_INTERNAL_FPCONV)
+        target_compile_definitions(cjson PRIVATE DISABLE_INVALID_NUMBERS)
+    endif()
+    install(TARGETS cjson ARCHIVE DESTINATION lib)
+    install(FILES lua_cjson.h DESTINATION include)
+    return()
+endif()
+
 get_filename_component(_lua_lib_dir ${LUA_LIBRARY} PATH)
 
 if(APPLE)
