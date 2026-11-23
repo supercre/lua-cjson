@@ -75,6 +75,8 @@
 #define DEFAULT_DECODE_INVALID_NUMBERS 1
 #define DEFAULT_ENCODE_KEEP_BUFFER 1
 #define DEFAULT_ENCODE_NUMBER_PRECISION 14
+#define DEFAULT_DECODE_LUA_NIL 0
+#define DEFAULT_DECODE_INVALID_ESCAPES 0
 
 #define DECODE_INT64_OFF 0
 #define DECODE_INT64_AUTO 1
@@ -144,6 +146,8 @@ typedef struct {
     int decode_invalid_numbers;
     int decode_max_depth;
     int decode_int64;
+    int decode_lua_nil;             /* 1 => JSON null becomes Lua nil */
+    int decode_invalid_escapes;     /* 1 => "\x" decodes as "x" for unknown escape codes */
 } json_config_t;
 
 typedef struct {
@@ -436,6 +440,26 @@ static int json_cfg_decode_invalid_numbers(lua_State *l)
     return 1;
 }
 
+/* Configures whether JSON null is decoded as Lua nil instead of cjson.null */
+static int json_cfg_decode_lua_nil(lua_State *l)
+{
+    json_config_t *cfg = json_arg_init(l, 1);
+
+    json_enum_option(l, 1, &cfg->decode_lua_nil, NULL, 1);
+
+    return 1;
+}
+
+/* Configures whether unknown escape codes in strings are accepted */
+static int json_cfg_decode_invalid_escapes(lua_State *l)
+{
+    json_config_t *cfg = json_arg_init(l, 1);
+
+    json_enum_option(l, 1, &cfg->decode_invalid_escapes, NULL, 1);
+
+    return 1;
+}
+
 static int json_destroy_config(lua_State *l)
 {
     json_config_t *cfg;
@@ -471,6 +495,8 @@ static void json_create_config(lua_State *l)
     cfg->encode_keep_buffer = DEFAULT_ENCODE_KEEP_BUFFER;
     cfg->encode_number_precision = DEFAULT_ENCODE_NUMBER_PRECISION;
     cfg->decode_int64 = DECODE_INT64_OFF;
+    cfg->decode_lua_nil = DEFAULT_DECODE_LUA_NIL;
+    cfg->decode_invalid_escapes = DEFAULT_DECODE_INVALID_ESCAPES;
 
 #if DEFAULT_ENCODE_KEEP_BUFFER > 0
     strbuf_init(&cfg->encode_buf, 0);
@@ -1036,10 +1062,10 @@ static void json_next_string_token(json_parse_t *json, json_token_t *token)
         /* Handle escapes */
         if (ch == '\\') {
             /* Fetch escape character */
-            ch = *(json->ptr + 1);
+            char escaped = *(json->ptr + 1);
 
             /* Translate escape code and append to tmp string */
-            ch = escape2char[(unsigned char)ch];
+            ch = escape2char[(unsigned char)escaped];
             if (ch == 'u') {
                 if (json_append_unicode_escape(json) == 0)
                     continue;
@@ -1049,8 +1075,13 @@ static void json_next_string_token(json_parse_t *json, json_token_t *token)
                 return;
             }
             if (!ch) {
-                json_set_token_error(token, json, "invalid escape code");
-                return;
+                /* decode_invalid_escapes keeps the character after the
+                 * backslash. The end of the text is still an error. */
+                if (!json->cfg->decode_invalid_escapes || !escaped) {
+                    json_set_token_error(token, json, "invalid escape code");
+                    return;
+                }
+                ch = escaped;
             }
 
             /* Skip '\' */
@@ -1436,8 +1467,12 @@ static void json_process_value(lua_State *l, json_parse_t *json,
         break;;
     case T_NULL:
         /* In Lua, setting "t[k] = nil" will delete k from the table.
-         * Hence a NULL pointer lightuserdata object is used instead */
-        lua_pushlightuserdata(l, NULL);
+         * Hence a NULL pointer lightuserdata object is used instead,
+         * unless decode_lua_nil asks for exactly that. */
+        if (json->cfg->decode_lua_nil)
+            lua_pushnil(l);
+        else
+            lua_pushlightuserdata(l, NULL);
         break;;
     default:
         json_throw_parse_error(l, json, "value", token);
@@ -1550,6 +1585,8 @@ static int lua_cjson_new(lua_State *l)
         { "encode_keep_buffer", json_cfg_encode_keep_buffer },
         { "encode_invalid_numbers", json_cfg_encode_invalid_numbers },
         { "decode_invalid_numbers", json_cfg_decode_invalid_numbers },
+        { "decode_lua_nil", json_cfg_decode_lua_nil },
+        { "decode_invalid_escapes", json_cfg_decode_invalid_escapes },
         { "new", lua_cjson_new },
         { NULL, NULL }
     };

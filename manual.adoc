@@ -182,6 +182,8 @@ value = cjson.decode(text)
 -- Get and/or set Lua CJSON configuration
 setting = cjson.decode_invalid_numbers([setting])
     mode = cjson.decode_int64([mode])
+setting = cjson.decode_lua_nil([setting])
+setting = cjson.decode_invalid_escapes([setting])
 setting = cjson.encode_invalid_numbers([setting])
 keep = cjson.encode_keep_buffer([keep])
 depth = cjson.encode_max_depth([depth])
@@ -316,6 +318,46 @@ JSON 객체의 키는 디코딩 시 기존처럼 문자열로 유지합니다.
 LuaJIT +LL+/+ULL+ 리터럴이나 JSON 문자열을 사용해야 합니다.
 JSON은 signed/unsigned 타입을 구분하지 않으므로 작은 +uint64_t+는
 디코딩 시 +int64_t+가 될 수 있습니다.
+
+
+[[decode_lua_nil]]
+decode_lua_nil
+~~~~~~~~~~~~~~
+
+[source,lua]
+------------
+setting = cjson.decode_lua_nil([setting])
+-- "setting"은 boolean. 기본값: false.
+------------
+
+supercre 포크에서 추가한 설정입니다. 인자를 생략하면 현재 설정을 반환하며,
++cjson.new()+ 및 +cjson.safe.new()+는 기본값 +false+로 시작합니다.
+
++false+:: JSON +null+을 +cjson.null+(NULL lightuserdata)로 디코딩합니다.
++true+:: JSON +null+을 Lua +nil+로 디코딩합니다. 객체의 해당 키는 테이블에 남지 않고,
+  배열의 해당 자리는 비어 있게 됩니다. 최상위 +null+은 +nil+을 반환합니다.
+
++true+에서는 +null+과 키가 없는 경우를 구분할 수 없고, 가운데가 빈 배열의 길이(+#+)는
+Lua의 규칙대로 정해지지 않습니다. 인코딩에는 영향을 주지 않습니다.
+
+
+[[decode_invalid_escapes]]
+decode_invalid_escapes
+~~~~~~~~~~~~~~~~~~~~~~
+
+[source,lua]
+------------
+setting = cjson.decode_invalid_escapes([setting])
+-- "setting"은 boolean. 기본값: false.
+------------
+
+supercre 포크에서 추가한 설정입니다. 인자를 생략하면 현재 설정을 반환하며,
++cjson.new()+ 및 +cjson.safe.new()+는 기본값 +false+로 시작합니다.
+
++false+:: JSON 규격에 없는 이스케이프(예: +\q+, +\'+, +\x+)를 만나면 오류를 냅니다.
++true+:: 규격에 없는 이스케이프는 역슬래시를 버리고 뒤의 문자를 그대로 둡니다
+  (+"a\qb"+ -> +aqb+). 문자열이 역슬래시로 끝나는 경우와 잘못된 +\u+ 이스케이프는
+  이 설정에서도 오류입니다.
 
 
 [[decode_invalid_numbers]]

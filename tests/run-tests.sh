@@ -12,6 +12,8 @@ cd "$SOURCE_DIR/tests"
 perl genutf8.pl
 "$LUA_COMMAND" test.lua
 "$LUA_COMMAND" test-int64.lua
+"$LUA_COMMAND" test-compat.lua
 if "$LUA_COMMAND" -e 'assert(jit)' 2>/dev/null; then
     "$LUA_COMMAND" -joff test-int64.lua
+    "$LUA_COMMAND" -joff test-compat.lua
 fi

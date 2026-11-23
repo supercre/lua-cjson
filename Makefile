@@ -71,7 +71,7 @@ FPCONV_OBJS =       fpconv.o
 
 ##### End customisable sections #####
 
-TEST_FILES =        README bench.lua genutf8.pl test.lua test-int64.lua octets-escaped.dat \
+TEST_FILES =        README bench.lua genutf8.pl test.lua test-int64.lua test-compat.lua octets-escaped.dat \
                     example1.json example2.json example3.json example4.json \
                     example5.json numbers.json rfc-example1.json \
                     rfc-example2.json types.json
