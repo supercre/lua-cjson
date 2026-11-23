@@ -59,10 +59,19 @@ if(NOT HAVE_ISINF)
     add_definitions(-DUSE_INTERNAL_ISINF)
 endif()
 
+# Windows의 예전 C 런타임(msvcrt: VS2013 이하, MinGW)인지. VS2015부터의 UCRT는 C99를 따른다.
+set(_cjson_windows_legacy_crt OFF)
+if(WIN32 AND (NOT MSVC OR MSVC_VERSION LESS 1900))
+    set(_cjson_windows_legacy_crt ON)
+endif()
+
 if(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     add_definitions(-Dinline=__inline)
-    add_definitions(-Dsnprintf=_snprintf)
+    # UCRT에서 snprintf는 표준 함수이고, 매크로로 정의하면 <stdio.h>가 오류를 낸다.
+    if(_cjson_windows_legacy_crt)
+        add_definitions(-Dsnprintf=_snprintf)
+    endif()
     add_definitions(-Dstrncasecmp=_strnicmp)
 endif()
 
@@ -72,7 +81,9 @@ if(CJSON_BUILD_STATIC)
     target_compile_definitions(cjson PRIVATE CJSON_STATIC)
     set_target_properties(cjson PROPERTIES OUTPUT_NAME "lua-cjson")
     target_link_libraries(cjson ${_MODULE_LINK})
-    if(WIN32 AND NOT USE_INTERNAL_FPCONV)
+    # 예전 C 런타임의 strtod()/sprintf()는 NaN/Infinity와 16진수를 표준대로 다루지 않아 지원하지 않는다.
+    # UCRT에서는 다른 플랫폼과 같게 허용한다(막으면 Windows에서만 "01", "0x10", "NaN"의 디코딩이 오류가 된다).
+    if(_cjson_windows_legacy_crt AND NOT USE_INTERNAL_FPCONV)
         target_compile_definitions(cjson PRIVATE DISABLE_INVALID_NUMBERS)
     endif()
     install(TARGETS cjson ARCHIVE DESTINATION lib)
@@ -91,8 +102,10 @@ if(WIN32)
     # Win32 modules need to be linked to the Lua library.
     set(_MODULE_LINK ${LUA_LIBRARY} ${_MODULE_LINK})
     set(_lua_module_dir "${_lua_lib_dir}")
-    # Windows sprintf()/strtod() handle NaN/inf differently. Not supported.
-    add_definitions(-DDISABLE_INVALID_NUMBERS)
+    # The old Windows C runtime's sprintf()/strtod() handle NaN/inf differently. Not supported there.
+    if(_cjson_windows_legacy_crt)
+        add_definitions(-DDISABLE_INVALID_NUMBERS)
+    endif()
 else()
     set(_lua_module_dir "${_lua_lib_dir}/lua/5.1")
 endif()
